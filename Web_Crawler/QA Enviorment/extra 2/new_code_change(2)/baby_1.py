@@ -5,6 +5,7 @@ import random
 import logging
 import requests
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def setup_logging():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -54,7 +55,6 @@ def categorize_url(url, start_domain):
     return category
 
 def parse_html(html):
-    print("Here will be the html",html)
     soup = BeautifulSoup(html, 'html.parser')
     organized_content = {}
     heading_stack = []
@@ -87,15 +87,16 @@ def create_content_dict(organized_content, url):
         "text_chunk": full_text.strip()
     }
 
-def process_internal_url(session, url, all_data):
+def process_internal_url(session, url):
     try:
         response = session.get(url)
         response.raise_for_status()
         organized_content = parse_html(response.content)
         content_dict = create_content_dict(organized_content, url)
-        all_data.append(content_dict)
+        return content_dict
     except requests.RequestException as e:
         logging.error(f"Error processing URL {url}: {e}")
+        return None
 
 def main(start_url):
     setup_logging()
@@ -105,33 +106,48 @@ def main(start_url):
     all_data = []  # To store structured content for JSON output
 
     session = requests.Session()
+    MAX_THREADS = 10  # Adjust based on requirements and resources
+    url_count = 0  # Initialize url_count if it's needed
 
-    url_count = 0
     while to_visit:
+    
         current_url = to_visit.pop()
         logging.info(f"Visiting: {current_url}")
 
-        all_urls.add(current_url)  # Add to all_urls set
+        all_urls.add(current_url)
         category = categorize_url(current_url, start_domain)
-        url_categories[category].add(current_url)  # Update category set
+        url_categories[category].add(current_url)
         logging.info(f"URL: {current_url} added to category: {category}")
 
-        if category == 'Internal' and category == 'External':
-            process_internal_url(session, current_url, all_data)  # Process and fetch content
+        if category == 'Internal' and len(url_categories['Internal']) >= MAX_THREADS:
+            # Using ThreadPoolExecutor to process URLs in parallel
+            with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+                future_to_url = {executor.submit(process_internal_url, session, url): url for url in url_categories['Internal']}
+                for future in as_completed(future_to_url):
+                    url = future_to_url[future]
+                    try:
+                        data = future.result()
+                        if data:
+                            all_data.append(data)
+                    except Exception as exc:
+                        logging.error('%r generated an exception: %s' % (url, exc))
+
+            # Clear the processed URLs from the category
+            url_categories['Internal'].clear()
 
         # Extract new links and update to_visit set
         new_links, is_failed = get_links_from_page(session, current_url)
         if not is_failed:
             filtered_links = set(filter(lambda url: categorize_url(url, start_domain) != 'Others', new_links))
-            to_visit.update(filtered_links - all_urls)  # Avoid re-visiting URLs
+            to_visit.update(filtered_links - all_urls)
 
         url_count += 1
-        if url_count > 3:
-            break  # Limiting the number of URLs to process
+        if url_count > 20:  # Adjust this limit as needed
+            break
         time.sleep(random.uniform(0.005, 0.05))
 
     # Save structured content to JSON file
-    save_to_json(all_data, 'output.json')  # Function to save data in JSON format
+    save_to_json(all_data, 'output.json')
     logging.info("Scraping complete.")
 
 def save_to_json(data, filename):
