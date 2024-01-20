@@ -97,6 +97,7 @@ def process_internal_url(session, url, all_data):
         logging.error(f"Error processing URL {url}: {e}")
 
 def main(start_url):
+    start_time = time.time()
     setup_logging()
     start_domain = urlparse(start_url).netloc
     to_visit, all_urls = {start_url}, set()
@@ -115,7 +116,7 @@ def main(start_url):
         url_categories[category].add(current_url)  # Update category set
         logging.info(f"URL: {current_url} added to category: {category}")
 
-        if category == 'Internal' and category == 'External':
+        if category == 'Internal':
             process_internal_url(session, current_url, all_data)  # Process and fetch content
 
         # Extract new links and update to_visit set
@@ -131,6 +132,9 @@ def main(start_url):
 
     # Save structured content to JSON file
     save_to_json(all_data, 'output.json')  # Function to save data in JSON format
+    end_time = time.time()  # End time measurement
+    total_time = end_time - start_time
+    print(f"Total execution time: {total_time} seconds")
     logging.info("Scraping complete.")
 
 def save_to_json(data, filename):
